@@ -5,6 +5,9 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import MidiWriter from 'midi-writer-js';
+import { Filesystem, Directory } from '@capacitor/filesystem';
+import { Share } from '@capacitor/share';
+import { Capacitor } from '@capacitor/core';
 import { GENRES } from '../constants/genres';
 import { KITS } from '../constants/kits';
 import { audioEngine } from '../services/audioEngine';
@@ -91,18 +94,66 @@ export function useDrumMachine() {
     audioEngine.setBpm(val);
   };
 
+  const saveFile = async (data: Blob | string, fileName: string, mimeType: string) => {
+    if (Capacitor.isNativePlatform()) {
+      try {
+        let base64Data = '';
+        if (typeof data === 'string') {
+          // It's already a base64 string or similar from buildFile() if it was a data URI or similar
+          // MidiWriter buildFile returns a string of bytes usually.
+          // But actually buildFile() returns a binary string for 'audio/midi' if not specified.
+          // Let's handle Blob specifically as it's more reliable.
+        }
+        
+        // Convert Blob to Base64 for Capacitor
+        const blob = data instanceof Blob ? data : new Blob([data], { type: mimeType });
+        const reader = new FileReader();
+        base64Data = await new Promise((resolve) => {
+          reader.onloadend = () => {
+            const base64 = reader.result as string;
+            resolve(base64.split(',')[1]); // Remove the data:mime/type;base64, prefix
+          };
+          reader.readAsDataURL(blob);
+        });
+
+        // Save to temporary directory
+        const result = await Filesystem.writeFile({
+          path: fileName,
+          data: base64Data,
+          directory: Directory.Cache,
+        });
+
+        // Share the file so the user can save it or send it
+        await Share.share({
+          title: fileName,
+          text: `Download ${fileName}`,
+          url: result.uri,
+          dialogTitle: `Save ${fileName}`,
+        });
+      } catch (error) {
+        console.error('Error saving file on mobile:', error);
+        alert('Could not save file to mobile. Please check permissions.');
+      }
+    } else {
+      // Browser download
+      const blob = data instanceof Blob ? data : new Blob([data], { type: mimeType });
+      const url = URL.createObjectURL(blob);
+      const anchor = document.createElement('a');
+      anchor.href = url;
+      anchor.download = fileName;
+      anchor.click();
+      setTimeout(() => URL.revokeObjectURL(url), 100);
+    }
+  };
+
   const downloadWav = async () => {
     if (!currentPattern) return;
     const blob = await audioEngine.renderToWav(currentPattern, bpm, kit.id);
-    const url = URL.createObjectURL(blob);
-    const anchor = document.createElement('a');
-    anchor.href = url;
-    anchor.download = `X-Gen_${genre.id}_${patternIndex + 1}_${bpm}BPM.wav`;
-    anchor.click();
-    URL.revokeObjectURL(url);
+    const fileName = `X-Gen_${genre.id}_${patternIndex + 1}_${bpm}BPM.wav`;
+    await saveFile(blob, fileName, 'audio/wav');
   };
 
-  const downloadMidi = () => {
+  const downloadMidi = async () => {
     if (!currentPattern) return;
     
     // Standard MIDI Note numbers for GM Drums
@@ -138,16 +189,11 @@ export function useDrumMachine() {
 
     const writer = new MidiWriter.Writer(tracks);
     const build = writer.buildFile();
-    const blob = new Blob([build], { type: 'audio/midi' });
-    const url = URL.createObjectURL(blob);
-    const anchor = document.createElement('a');
-    anchor.href = url;
-    anchor.download = `X-Gen_${genre.id}_Pattern${patternIndex + 1}_${bpm}BPM.mid`;
-    anchor.click();
-    URL.revokeObjectURL(url);
+    const fileName = `X-Gen_${genre.id}_Pattern${patternIndex + 1}_${bpm}BPM.mid`;
+    await saveFile(build, fileName, 'audio/midi');
   };
 
-  const downloadMidiSingle = () => {
+  const downloadMidiSingle = async () => {
     if (!currentPattern) return;
     
     const trackMapping: Record<InstrumentType, number> = {
@@ -179,13 +225,8 @@ export function useDrumMachine() {
 
     const writer = new MidiWriter.Writer([track]);
     const build = writer.buildFile();
-    const blob = new Blob([build], { type: 'audio/midi' });
-    const url = URL.createObjectURL(blob);
-    const anchor = document.createElement('a');
-    anchor.href = url;
-    anchor.download = `X-Gen_${genre.id}_FullTrack_${bpm}BPM.mid`;
-    anchor.click();
-    URL.revokeObjectURL(url);
+    const fileName = `X-Gen_${genre.id}_FullTrack_${bpm}BPM.mid`;
+    await saveFile(build, fileName, 'audio/midi');
   };
 
   return {
